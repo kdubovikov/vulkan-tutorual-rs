@@ -1,19 +1,21 @@
-use device::pick_physical_device;
+use device::{create_device};
 use log::info;
-use vulkano_win::required_extensions;
 use std::{iter::Inspect, sync::Arc};
-use vulkano::{app_info_from_cargo_toml, instance::{ApplicationInfo, Instance, InstanceExtensions, Version, debug::{DebugCallback, MessageSeverity, MessageType}, layers_list}};
-use winit::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::{Window, WindowBuilder},
+use vulkano::{
+    app_info_from_cargo_toml,
+    device::{Device, QueuesIter},
+    instance::{
+        debug::{DebugCallback, MessageSeverity, MessageType},
+        layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
+    },
+    swapchain::Surface,
 };
+use vulkano_win::{required_extensions, VkSurfaceBuild};
+use winit::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, platform::run_return::EventLoopExtRunReturn, window::{Window, WindowBuilder}};
 
 mod device;
 
-const VALIDATION_LAYERS: &[&str] = &[
-    "VK_LAYER_LUNARG_standard_validation"
-];
+const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_LUNARG_standard_validation"];
 
 #[cfg(all(debug_assertions))]
 const ENABLE_VALIDATION_LAYERS: bool = true;
@@ -24,43 +26,60 @@ const ENABLE_VALIDATION_LAYERS: bool = false;
 struct GraphicsApplication {
     instance: Arc<Instance>,
     debug_callback: Option<DebugCallback>,
-    device_id: usize
+    device: Arc<Device>,
+    graphics_queue: QueuesIter,
+    event_loop: Option<EventLoop<()>>,
+    surface: Arc<Surface<Window>>,
 }
 
 impl GraphicsApplication {
     pub fn new() -> Self {
         let instance = Self::create_vk_instance();
         let debug_callback = Self::create_debug_callback(&instance);
-        let device_id = pick_physical_device(&instance);
+        let (event_loop, surface) = Self::create_surface(&instance);
+        let (device, graphics_queue) = create_device(&surface, &instance);
 
-        Self { instance, debug_callback, device_id }
+        Self {
+            instance,
+            debug_callback,
+            device,
+            graphics_queue,
+            event_loop: Some(event_loop),
+            surface,
+        }
     }
 
-    fn main_loop(&self) {
-        let (event_loop, window) = Self::create_window();
+    fn main_loop(&mut self) {
+        let our_window_id = self.surface.window().id().clone();
         loop {
-            event_loop.run(move |event, _, control_flow| {
+            self.event_loop.take().unwrap().run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::Wait;
 
                 match event {
                     Event::WindowEvent {
                         event: WindowEvent::CloseRequested,
                         window_id,
-                    } if window_id == window.id() => *control_flow = ControlFlow::Exit,
+                    } if window_id == our_window_id => *control_flow = ControlFlow::Exit,
+                    Event::WindowEvent {
+                        event: WindowEvent::CloseRequested,
+                        window_id,
+                    } => {
+                        println!("{:?} {:?}", window_id, our_window_id)
+                    }
                     _ => (),
                 }
             });
         }
     }
 
-    fn create_window() -> (EventLoop<()>, Window) {
+    fn create_surface(instance: &Arc<Instance>) -> (EventLoop<()>, Arc<Surface<Window>>) {
         let event_loop = EventLoop::new();
-        let window = WindowBuilder::new()
+        let surface = WindowBuilder::new()
             .with_title("Vulkan")
-            .build(&event_loop)
+            .build_vk_surface(&event_loop, instance.clone())
             .unwrap();
 
-        (event_loop, window)
+        (event_loop, surface)
     }
 
     fn create_vk_instance() -> Arc<Instance> {
@@ -73,8 +92,13 @@ impl GraphicsApplication {
         let required_extensions = vulkano_win::required_extensions();
 
         if ENABLE_VALIDATION_LAYERS && Self::check_validation_layer_support() {
-            Instance::new(Some(&app_info), Version::V1_1, &required_extensions, VALIDATION_LAYERS.iter().cloned())
-                .expect("failed to create Vulkan instance")
+            Instance::new(
+                Some(&app_info),
+                Version::V1_1,
+                &required_extensions,
+                VALIDATION_LAYERS.iter().cloned(),
+            )
+            .expect("failed to create Vulkan instance")
         } else {
             Instance::new(Some(&app_info), Version::V1_1, &required_extensions, None)
                 .expect("failed to create Vulkan instance")
@@ -82,14 +106,13 @@ impl GraphicsApplication {
     }
 
     fn check_validation_layer_support() -> bool {
-            let layers: Vec<_> = layers_list()
-                .unwrap()
-                .map(|layer| 
-                    layer.name().to_owned()
-                ).collect();
-            VALIDATION_LAYERS
-                .iter()
-                .all(|layer_name| layers.contains(&layer_name.to_string()))
+        let layers: Vec<_> = layers_list()
+            .unwrap()
+            .map(|layer| layer.name().to_owned())
+            .collect();
+        VALIDATION_LAYERS
+            .iter()
+            .all(|layer_name| layers.contains(&layer_name.to_string()))
     }
 
     fn get_required_extensions() -> InstanceExtensions {
@@ -112,12 +135,13 @@ impl GraphicsApplication {
             error: true,
             warning: true,
             information: true,
-            verbose: false
+            verbose: false,
         };
 
         DebugCallback::new(&instance, severipy, msg_types, |msg| {
             println!("validation layer: {:?}", msg.description)
-        }).ok()
+        })
+        .ok()
     }
 }
 
