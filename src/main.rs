@@ -1,3 +1,4 @@
+use device::pick_physical_device;
 use log::info;
 use vulkano_win::required_extensions;
 use std::{iter::Inspect, sync::Arc};
@@ -7,6 +8,8 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
+
+mod device;
 
 const VALIDATION_LAYERS: &[&str] = &[
     "VK_LAYER_LUNARG_standard_validation"
@@ -21,13 +24,16 @@ const ENABLE_VALIDATION_LAYERS: bool = false;
 struct GraphicsApplication {
     instance: Arc<Instance>,
     debug_callback: Option<DebugCallback>,
+    device_id: usize
 }
 
 impl GraphicsApplication {
     pub fn new() -> Self {
         let instance = Self::create_vk_instance();
         let debug_callback = Self::create_debug_callback(&instance);
-        Self { instance, debug_callback }
+        let device_id = pick_physical_device(&instance);
+
+        Self { instance, debug_callback, device_id }
     }
 
     fn main_loop(&self) {
