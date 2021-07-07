@@ -1,19 +1,16 @@
-use device::{create_device};
+mod device;
+mod swapchain;
+
+use device::create_device;
 use log::info;
+use swapchain::create_swap_chain;
 use std::{iter::Inspect, sync::Arc};
-use vulkano::{
-    app_info_from_cargo_toml,
-    device::{Device, QueuesIter},
-    instance::{
+use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, image::SwapchainImage, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    },
-    swapchain::Surface,
-};
+    }, swapchain::{Surface, Swapchain}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, platform::run_return::EventLoopExtRunReturn, window::{Window, WindowBuilder}};
-
-mod device;
 
 const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_LUNARG_standard_validation"];
 
@@ -27,9 +24,12 @@ struct GraphicsApplication {
     instance: Arc<Instance>,
     debug_callback: Option<DebugCallback>,
     device: Arc<Device>,
-    graphics_queue: QueuesIter,
+    graphics_queue: Arc<Queue>,
+    presentation_queue: Arc<Queue>,
     event_loop: Option<EventLoop<()>>,
     surface: Arc<Surface<Window>>,
+    swap_chain: Arc<Swapchain<Window>>,
+    swap_chain_images: Vec<Arc<SwapchainImage<Window>>>,
 }
 
 impl GraphicsApplication {
@@ -37,15 +37,27 @@ impl GraphicsApplication {
         let instance = Self::create_vk_instance();
         let debug_callback = Self::create_debug_callback(&instance);
         let (event_loop, surface) = Self::create_surface(&instance);
-        let (device, graphics_queue) = create_device(&surface, &instance);
+        let (device, graphics_queue, presentation_queue) = create_device(&surface, &instance);
+        let (swap_chain, swap_chain_images) = create_swap_chain(
+            &instance, 
+            &surface,
+            device.physical_device().index(), 
+            &device, 
+            &graphics_queue, 
+            &presentation_queue, 
+            800, 
+            600);
 
         Self {
             instance,
             debug_callback,
             device,
             graphics_queue,
+            presentation_queue,
             event_loop: Some(event_loop),
             surface,
+            swap_chain,
+            swap_chain_images
         }
     }
 
