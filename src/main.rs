@@ -4,11 +4,11 @@ mod swapchain;
 use device::create_device;
 use log::info;
 use swapchain::create_swap_chain;
-use std::{iter::Inspect, sync::Arc};
+use std::{cmp::Ordering, iter::Inspect, sync::Arc};
 use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, image::SwapchainImage, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, swapchain::{Surface, Swapchain}};
+    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::BufferlessDefinition, viewport::Viewport}, swapchain::{Surface, Swapchain}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, platform::run_return::EventLoopExtRunReturn, window::{Window, WindowBuilder}};
 
@@ -19,6 +19,20 @@ const ENABLE_VALIDATION_LAYERS: bool = true;
 
 #[cfg(not(debug_assertions))]
 const ENABLE_VALIDATION_LAYERS: bool = false;
+
+mod vertex_shader {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/shaders/triangle.vert"
+    }
+}
+
+mod fragment_shader {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/triangle.frag"
+    }
+}
 
 struct GraphicsApplication {
     instance: Arc<Instance>,
@@ -154,6 +168,38 @@ impl GraphicsApplication {
             println!("validation layer: {:?}", msg.description)
         })
         .ok()
+    }
+
+    fn create_graphics_pipeline(device: &Arc<Device>, swap_chain_extent: [u32; 2]) {
+
+        let vert_shader_module = vertex_shader::Shader::load(device.clone())
+            .expect("Failed to create vertex shader module");
+        let frag_shader_module = fragment_shader::Shader::load(device.clone())
+            .expect("Failed to create fragment shader module");
+
+        let dimensions = [swap_chain_extent[0] as f32, swap_chain_extent[1] as f32];
+
+        let viewport = Viewport {
+            origin:  [0.0, 0.0],
+            dimensions,
+            depth_range: 0.0..1.0
+        };
+
+        let _pipeline_builder = Arc::new(
+            GraphicsPipeline::start()
+                    .vertex_input(BufferlessDefinition {})
+                    .vertex_shader(vert_shader_module.main_entry_point(), ())
+                    .triangle_list()
+                    .primitive_restart(false)
+                    .viewports(vec![viewport])
+                    .fragment_shader(frag_shader_module.main_entry_point(), ())
+                    .depth_clamp(false)
+                    .polygon_mode_fill()
+                    .line_width(1.0)
+                    .cull_mode_back()
+                    .front_face_clockwise()
+                    .blend_pass_through()
+        );
     }
 }
 
