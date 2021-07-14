@@ -5,10 +5,10 @@ use device::create_device;
 use log::info;
 use swapchain::create_swap_chain;
 use std::{cmp::Ordering, iter::Inspect, sync::Arc};
-use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, image::SwapchainImage, instance::{
+use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, format::Format, image::SwapchainImage, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::BufferlessDefinition, viewport::Viewport}, swapchain::{Surface, Swapchain}};
+    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::BufferlessDefinition, viewport::Viewport}, render_pass::RenderPass, swapchain::{Surface, Swapchain}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, platform::run_return::EventLoopExtRunReturn, window::{Window, WindowBuilder}};
 
@@ -44,6 +44,7 @@ struct GraphicsApplication {
     surface: Arc<Surface<Window>>,
     swap_chain: Arc<Swapchain<Window>>,
     swap_chain_images: Vec<Arc<SwapchainImage<Window>>>,
+    render_pass: Arc<RenderPass>
 }
 
 impl GraphicsApplication {
@@ -61,6 +62,7 @@ impl GraphicsApplication {
             &presentation_queue, 
             800, 
             600);
+        let render_pass = Self::create_render_pass(&device, swap_chain.format());
 
         Self {
             instance,
@@ -71,7 +73,8 @@ impl GraphicsApplication {
             event_loop: Some(event_loop),
             surface,
             swap_chain,
-            swap_chain_images
+            swap_chain_images,
+            render_pass
         }
     }
 
@@ -200,6 +203,26 @@ impl GraphicsApplication {
                     .front_face_clockwise()
                     .blend_pass_through()
         );
+    }
+    
+    fn create_render_pass(device: &Arc<Device>, color_format: Format) -> Arc<RenderPass> {
+        Arc::new(
+            vulkano::single_pass_renderpass!(
+                device.clone(),
+                attachments: {
+                    color: {
+                        load: Clear,
+                        store: Store,
+                        format: color_format,
+                        samples: 1,
+                    }
+                },
+                pass: {
+                    color: [color],
+                    depth_stencil: {}
+                }
+            ).unwrap()
+        )
     }
 }
 
