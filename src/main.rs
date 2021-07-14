@@ -8,7 +8,7 @@ use std::{cmp::Ordering, iter::Inspect, sync::Arc};
 use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, format::Format, image::SwapchainImage, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::BufferlessDefinition, viewport::Viewport}, render_pass::RenderPass, swapchain::{Surface, Swapchain}};
+    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::BufferlessDefinition, viewport::Viewport}, render_pass::{RenderPass, Subpass}, swapchain::{Surface, Swapchain}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, platform::run_return::EventLoopExtRunReturn, window::{Window, WindowBuilder}};
 
@@ -44,7 +44,8 @@ struct GraphicsApplication {
     surface: Arc<Surface<Window>>,
     swap_chain: Arc<Swapchain<Window>>,
     swap_chain_images: Vec<Arc<SwapchainImage<Window>>>,
-    render_pass: Arc<RenderPass>
+    render_pass: Arc<RenderPass>,
+    graphics_pipeline: Arc<GraphicsPipeline<BufferlessDefinition>>,
 }
 
 impl GraphicsApplication {
@@ -63,6 +64,7 @@ impl GraphicsApplication {
             800, 
             600);
         let render_pass = Self::create_render_pass(&device, swap_chain.format());
+        let graphics_pipeline = Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
 
         Self {
             instance,
@@ -74,7 +76,8 @@ impl GraphicsApplication {
             surface,
             swap_chain,
             swap_chain_images,
-            render_pass
+            render_pass,
+            graphics_pipeline
         }
     }
 
@@ -173,7 +176,7 @@ impl GraphicsApplication {
         .ok()
     }
 
-    fn create_graphics_pipeline(device: &Arc<Device>, swap_chain_extent: [u32; 2]) {
+    fn create_graphics_pipeline(device: &Arc<Device>, swap_chain_extent: [u32; 2], render_pass: &Arc<RenderPass>) -> Arc<GraphicsPipeline<BufferlessDefinition>> {
 
         let vert_shader_module = vertex_shader::Shader::load(device.clone())
             .expect("Failed to create vertex shader module");
@@ -188,7 +191,7 @@ impl GraphicsApplication {
             depth_range: 0.0..1.0
         };
 
-        let _pipeline_builder = Arc::new(
+        Arc::new(
             GraphicsPipeline::start()
                     .vertex_input(BufferlessDefinition {})
                     .vertex_shader(vert_shader_module.main_entry_point(), ())
@@ -201,8 +204,11 @@ impl GraphicsApplication {
                     .line_width(1.0)
                     .cull_mode_back()
                     .front_face_clockwise()
+                    .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
                     .blend_pass_through()
-        );
+                    .build(device.clone())
+                    .unwrap()
+        )
     }
     
     fn create_render_pass(device: &Arc<Device>, color_format: Format) -> Arc<RenderPass> {
