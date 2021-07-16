@@ -5,12 +5,10 @@ use device::create_device;
 use log::info;
 use std::{cmp::Ordering, iter::Inspect, sync::Arc};
 use swapchain::create_swap_chain;
-use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, format::Format, image::{SwapchainImage, view::ImageView}, instance::{
+use vulkano::{app_info_from_cargo_toml, command_buffer::{AutoCommandBufferBuilder, DynamicState, PrimaryAutoCommandBuffer, SubpassContents}, device::{Device, Queue, QueuesIter}, format::Format, image::{view::ImageView, SwapchainImage}, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, pipeline::{
-        vertex::BufferlessDefinition, viewport::Viewport, GraphicsPipeline, GraphicsPipelineBuilder,
-    }, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{Surface, Swapchain}};
+    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::{BufferlessDefinition, BufferlessVertices}, viewport::Viewport}, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{Surface, Swapchain}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{
     event::{Event, WindowEvent},
@@ -54,6 +52,7 @@ struct GraphicsApplication {
     render_pass: Arc<RenderPass>,
     graphics_pipeline: Arc<GraphicsPipeline<BufferlessDefinition>>,
     framebuffers: Vec<Arc<FramebufferAbstract + Send + Sync>>,
+    command_buffers: Vec<Arc<PrimaryAutoCommandBuffer>>,
 }
 
 impl GraphicsApplication {
@@ -77,6 +76,28 @@ impl GraphicsApplication {
             Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
         let framebuffers = Self::create_framebuffers(&swap_chain_images, &render_pass);
 
+        let command_buffers = framebuffers.iter().map(|framebuffer| {
+            let verticies = BufferlessVertices {vertices: 3, instances: 1};
+
+            let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
+                device.clone(),
+                graphics_queue.family(),
+                vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+            ).unwrap();
+            command_buffer_builder
+                .begin_render_pass(framebuffer.clone(), SubpassContents::Inline, vec![[0.0, 0.0, 0.0, 1.0].into()])
+                .unwrap()
+                .draw(graphics_pipeline.clone(), &DynamicState::none(), verticies, (), (), vec![])
+                .unwrap()
+                .end_render_pass()
+                .unwrap();
+
+            Arc::new(command_buffer_builder
+                .build()
+                .unwrap())
+            }
+        ).collect();
+
         Self {
             instance,
             debug_callback,
@@ -89,7 +110,8 @@ impl GraphicsApplication {
             swap_chain_images,
             render_pass,
             graphics_pipeline,
-            framebuffers
+            framebuffers,
+            command_buffers,
         }
     }
 
@@ -250,20 +272,29 @@ impl GraphicsApplication {
         )
     }
 
-    fn create_framebuffers(swap_chain_images: &[Arc<SwapchainImage<Window>>], render_pass: &Arc<RenderPass>) -> Vec<Arc<dyn FramebufferAbstract + Send + Sync>> {
-        swap_chain_images.iter()
+    fn create_framebuffers(
+        swap_chain_images: &[Arc<SwapchainImage<Window>>],
+        render_pass: &Arc<RenderPass>,
+    ) -> Vec<Arc<dyn FramebufferAbstract + Send + Sync>> {
+        swap_chain_images
+            .iter()
             .map(|image| {
                 // creating a view is necessary in 0.24, but vulkano docs do not mention this
                 let view = ImageView::new(image.clone()).unwrap();
-                let framebuffer = Arc::new(Framebuffer::start(render_pass.clone())
-                    .add(view).unwrap()
-                    .build().unwrap()
+                let framebuffer = Arc::new(
+                    Framebuffer::start(render_pass.clone())
+                        .add(view)
+                        .unwrap()
+                        .build()
+                        .unwrap(),
                 );
 
                 framebuffer as Arc<dyn FramebufferAbstract + Send + Sync>
             })
             .collect()
     }
+
+    fn create_command_buffers(&mut self) {}
 }
 
 fn main() {
