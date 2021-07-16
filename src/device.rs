@@ -1,5 +1,9 @@
-use std::{mem::needs_drop, sync::Arc, usize};
-use vulkano::{device::{Device, DeviceExtensions, Features, Queue, QueuesIter}, instance::{Instance, PhysicalDevice, QueueFamily}, swapchain::Surface};
+use std::{sync::Arc, usize};
+use vulkano::{
+    device::{Device, DeviceExtensions, Features, Queue},
+    instance::{Instance, PhysicalDevice},
+    swapchain::Surface,
+};
 use winit::window::Window;
 
 /// Structure that holds all necessary queue IDs for future reference
@@ -25,7 +29,7 @@ impl QueueCollection {
 fn device_extensions(physical_device: PhysicalDevice) -> DeviceExtensions {
     DeviceExtensions {
         khr_swapchain: true,
-        .. DeviceExtensions::required_extensions(physical_device)
+        ..DeviceExtensions::required_extensions(physical_device)
     }
 }
 
@@ -60,7 +64,7 @@ pub fn create_device(
     .unwrap();
 
     let graphics_queue = queues.next().unwrap();
-    let presentation_queue =  queues.next().unwrap_or(graphics_queue.clone());
+    let presentation_queue = queues.next().unwrap_or(graphics_queue.clone());
 
     (device, graphics_queue, presentation_queue)
 }

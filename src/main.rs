@@ -3,14 +3,21 @@ mod swapchain;
 
 use device::create_device;
 use log::info;
-use swapchain::create_swap_chain;
 use std::{cmp::Ordering, iter::Inspect, sync::Arc};
-use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, format::Format, image::SwapchainImage, instance::{
+use swapchain::create_swap_chain;
+use vulkano::{app_info_from_cargo_toml, device::{Device, Queue, QueuesIter}, format::Format, image::{SwapchainImage, view::ImageView}, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::BufferlessDefinition, viewport::Viewport}, render_pass::{RenderPass, Subpass}, swapchain::{Surface, Swapchain}};
+    }, pipeline::{
+        vertex::BufferlessDefinition, viewport::Viewport, GraphicsPipeline, GraphicsPipelineBuilder,
+    }, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{Surface, Swapchain}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
-use winit::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoop}, platform::run_return::EventLoopExtRunReturn, window::{Window, WindowBuilder}};
+use winit::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    platform::run_return::EventLoopExtRunReturn,
+    window::{Window, WindowBuilder},
+};
 
 const VALIDATION_LAYERS: &[&str] = &["VK_LAYER_LUNARG_standard_validation"];
 
@@ -46,6 +53,7 @@ struct GraphicsApplication {
     swap_chain_images: Vec<Arc<SwapchainImage<Window>>>,
     render_pass: Arc<RenderPass>,
     graphics_pipeline: Arc<GraphicsPipeline<BufferlessDefinition>>,
+    framebuffers: Vec<Arc<FramebufferAbstract + Send + Sync>>,
 }
 
 impl GraphicsApplication {
@@ -55,16 +63,19 @@ impl GraphicsApplication {
         let (event_loop, surface) = Self::create_surface(&instance);
         let (device, graphics_queue, presentation_queue) = create_device(&surface, &instance);
         let (swap_chain, swap_chain_images) = create_swap_chain(
-            &instance, 
+            &instance,
             &surface,
-            device.physical_device().index(), 
-            &device, 
-            &graphics_queue, 
-            &presentation_queue, 
-            800, 
-            600);
+            device.physical_device().index(),
+            &device,
+            &graphics_queue,
+            &presentation_queue,
+            800,
+            600,
+        );
         let render_pass = Self::create_render_pass(&device, swap_chain.format());
-        let graphics_pipeline = Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
+        let graphics_pipeline =
+            Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
+        let framebuffers = Self::create_framebuffers(&swap_chain_images, &render_pass);
 
         Self {
             instance,
@@ -77,30 +88,34 @@ impl GraphicsApplication {
             swap_chain,
             swap_chain_images,
             render_pass,
-            graphics_pipeline
+            graphics_pipeline,
+            framebuffers
         }
     }
 
     fn main_loop(&mut self) {
         let our_window_id = self.surface.window().id().clone();
         loop {
-            self.event_loop.take().unwrap().run(move |event, _, control_flow| {
-                *control_flow = ControlFlow::Wait;
+            self.event_loop
+                .take()
+                .unwrap()
+                .run(move |event, _, control_flow| {
+                    *control_flow = ControlFlow::Wait;
 
-                match event {
-                    Event::WindowEvent {
-                        event: WindowEvent::CloseRequested,
-                        window_id,
-                    } if window_id == our_window_id => *control_flow = ControlFlow::Exit,
-                    Event::WindowEvent {
-                        event: WindowEvent::CloseRequested,
-                        window_id,
-                    } => {
-                        println!("{:?} {:?}", window_id, our_window_id)
+                    match event {
+                        Event::WindowEvent {
+                            event: WindowEvent::CloseRequested,
+                            window_id,
+                        } if window_id == our_window_id => *control_flow = ControlFlow::Exit,
+                        Event::WindowEvent {
+                            event: WindowEvent::CloseRequested,
+                            window_id,
+                        } => {
+                            println!("{:?} {:?}", window_id, our_window_id)
+                        }
+                        _ => (),
                     }
-                    _ => (),
-                }
-            });
+                });
         }
     }
 
@@ -176,8 +191,11 @@ impl GraphicsApplication {
         .ok()
     }
 
-    fn create_graphics_pipeline(device: &Arc<Device>, swap_chain_extent: [u32; 2], render_pass: &Arc<RenderPass>) -> Arc<GraphicsPipeline<BufferlessDefinition>> {
-
+    fn create_graphics_pipeline(
+        device: &Arc<Device>,
+        swap_chain_extent: [u32; 2],
+        render_pass: &Arc<RenderPass>,
+    ) -> Arc<GraphicsPipeline<BufferlessDefinition>> {
         let vert_shader_module = vertex_shader::Shader::load(device.clone())
             .expect("Failed to create vertex shader module");
         let frag_shader_module = fragment_shader::Shader::load(device.clone())
@@ -186,31 +204,31 @@ impl GraphicsApplication {
         let dimensions = [swap_chain_extent[0] as f32, swap_chain_extent[1] as f32];
 
         let viewport = Viewport {
-            origin:  [0.0, 0.0],
+            origin: [0.0, 0.0],
             dimensions,
-            depth_range: 0.0..1.0
+            depth_range: 0.0..1.0,
         };
 
         Arc::new(
             GraphicsPipeline::start()
-                    .vertex_input(BufferlessDefinition {})
-                    .vertex_shader(vert_shader_module.main_entry_point(), ())
-                    .triangle_list()
-                    .primitive_restart(false)
-                    .viewports(vec![viewport])
-                    .fragment_shader(frag_shader_module.main_entry_point(), ())
-                    .depth_clamp(false)
-                    .polygon_mode_fill()
-                    .line_width(1.0)
-                    .cull_mode_back()
-                    .front_face_clockwise()
-                    .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
-                    .blend_pass_through()
-                    .build(device.clone())
-                    .unwrap()
+                .vertex_input(BufferlessDefinition {})
+                .vertex_shader(vert_shader_module.main_entry_point(), ())
+                .triangle_list()
+                .primitive_restart(false)
+                .viewports(vec![viewport])
+                .fragment_shader(frag_shader_module.main_entry_point(), ())
+                .depth_clamp(false)
+                .polygon_mode_fill()
+                .line_width(1.0)
+                .cull_mode_back()
+                .front_face_clockwise()
+                .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
+                .blend_pass_through()
+                .build(device.clone())
+                .unwrap(),
         )
     }
-    
+
     fn create_render_pass(device: &Arc<Device>, color_format: Format) -> Arc<RenderPass> {
         Arc::new(
             vulkano::single_pass_renderpass!(
@@ -227,8 +245,24 @@ impl GraphicsApplication {
                     color: [color],
                     depth_stencil: {}
                 }
-            ).unwrap()
+            )
+            .unwrap(),
         )
+    }
+
+    fn create_framebuffers(swap_chain_images: &[Arc<SwapchainImage<Window>>], render_pass: &Arc<RenderPass>) -> Vec<Arc<dyn FramebufferAbstract + Send + Sync>> {
+        swap_chain_images.iter()
+            .map(|image| {
+                // creating a view is necessary in 0.24, but vulkano docs do not mention this
+                let view = ImageView::new(image.clone()).unwrap();
+                let framebuffer = Arc::new(Framebuffer::start(render_pass.clone())
+                    .add(view).unwrap()
+                    .build().unwrap()
+                );
+
+                framebuffer as Arc<dyn FramebufferAbstract + Send + Sync>
+            })
+            .collect()
     }
 }
 
