@@ -1,0 +1,1 @@
+An implementation of https://github.com/bwasty/vulkan-tutorial-rs and https://vulkan-tutorial.com in Rust and updated Vulkano version (0.24).
