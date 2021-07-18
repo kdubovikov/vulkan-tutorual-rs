@@ -5,10 +5,16 @@ use device::create_device;
 use log::info;
 use std::{cmp::Ordering, iter::Inspect, sync::Arc};
 use swapchain::create_swap_chain;
-use vulkano::{app_info_from_cargo_toml, command_buffer::{AutoCommandBufferBuilder, DynamicState, PrimaryAutoCommandBuffer, SubpassContents}, device::{Device, Queue, QueuesIter}, format::Format, image::{view::ImageView, SwapchainImage}, instance::{
+use vulkano::{app_info_from_cargo_toml, command_buffer::{
+        AutoCommandBufferBuilder, DynamicState, PrimaryAutoCommandBuffer, SubpassContents,
+    }, device::{Device, Queue, QueuesIter}, format::Format, image::{view::ImageView, SwapchainImage}, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, pipeline::{GraphicsPipeline, GraphicsPipelineBuilder, vertex::{BufferlessDefinition, BufferlessVertices}, viewport::Viewport}, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{Surface, Swapchain}};
+    }, pipeline::{
+        vertex::{BufferlessDefinition, BufferlessVertices},
+        viewport::Viewport,
+        GraphicsPipeline, GraphicsPipelineBuilder,
+    }, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{acquire_next_image, Surface, Swapchain}, sync::GpuFuture};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{
     event::{Event, WindowEvent},
@@ -76,27 +82,43 @@ impl GraphicsApplication {
             Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
         let framebuffers = Self::create_framebuffers(&swap_chain_images, &render_pass);
 
-        let command_buffers = framebuffers.iter().map(|framebuffer| {
-            let verticies = BufferlessVertices {vertices: 3, instances: 1};
+        let command_buffers = framebuffers
+            .iter()
+            .map(|framebuffer| {
+                let verticies = BufferlessVertices {
+                    vertices: 3,
+                    instances: 1,
+                };
 
-            let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
-                device.clone(),
-                graphics_queue.family(),
-                vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
-            ).unwrap();
-            command_buffer_builder
-                .begin_render_pass(framebuffer.clone(), SubpassContents::Inline, vec![[0.0, 0.0, 0.0, 1.0].into()])
-                .unwrap()
-                .draw(graphics_pipeline.clone(), &DynamicState::none(), verticies, (), (), vec![])
-                .unwrap()
-                .end_render_pass()
+                let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
+                    device.clone(),
+                    graphics_queue.family(),
+                    vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit,
+                )
                 .unwrap();
 
-            Arc::new(command_buffer_builder
-                .build()
-                .unwrap())
-            }
-        ).collect();
+                command_buffer_builder
+                    .begin_render_pass(
+                        framebuffer.clone(),
+                        SubpassContents::Inline,
+                        vec![[0.0, 0.0, 0.0, 1.0].into()],
+                    )
+                    .unwrap()
+                    .draw(
+                        graphics_pipeline.clone(),
+                        &DynamicState::none(),
+                        verticies,
+                        (),
+                        (),
+                        vec![],
+                    )
+                    .unwrap()
+                    .end_render_pass()
+                    .unwrap();
+
+                Arc::new(command_buffer_builder.build().unwrap())
+            })
+            .collect();
 
         Self {
             instance,
@@ -118,6 +140,8 @@ impl GraphicsApplication {
     fn main_loop(&mut self) {
         let our_window_id = self.surface.window().id().clone();
         loop {
+            self.draw_frame();
+
             self.event_loop
                 .take()
                 .unwrap()
@@ -139,6 +163,20 @@ impl GraphicsApplication {
                     }
                 });
         }
+    }
+
+    fn draw_frame(&mut self) {
+        let (image_index, _, acquire_future) = acquire_next_image(self.swap_chain.clone(), None).unwrap();
+        let command_buffer = self.command_buffers[image_index].clone();
+
+        let future = acquire_future
+            .then_execute(self.graphics_queue.clone(), command_buffer)
+            .unwrap()
+            .then_swapchain_present(self.presentation_queue.clone(), self.swap_chain.clone(), image_index)
+            .then_signal_fence_and_flush()
+            .unwrap();
+
+        future.wait(None).unwrap();
     }
 
     fn create_surface(instance: &Arc<Instance>) -> (EventLoop<()>, Arc<Surface<Window>>) {
