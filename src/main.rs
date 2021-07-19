@@ -3,7 +3,7 @@ mod swapchain;
 
 use device::create_device;
 use log::info;
-use std::{cmp::Ordering, iter::Inspect, sync::Arc};
+use std::{cmp::Ordering, iter::Inspect, ops::Bound, sync::Arc};
 use swapchain::create_swap_chain;
 use vulkano::{app_info_from_cargo_toml, command_buffer::{
         AutoCommandBufferBuilder, DynamicState, PrimaryAutoCommandBuffer, SubpassContents,
@@ -14,7 +14,7 @@ use vulkano::{app_info_from_cargo_toml, command_buffer::{
         vertex::{BufferlessDefinition, BufferlessVertices},
         viewport::Viewport,
         GraphicsPipeline, GraphicsPipelineBuilder,
-    }, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{acquire_next_image, Surface, Swapchain}, sync::GpuFuture};
+    }, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{acquire_next_image, Surface, Swapchain}, sync::{self, GpuFuture}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{
     event::{Event, WindowEvent},
@@ -59,6 +59,8 @@ struct GraphicsApplication {
     graphics_pipeline: Arc<GraphicsPipeline<BufferlessDefinition>>,
     framebuffers: Vec<Arc<FramebufferAbstract + Send + Sync>>,
     command_buffers: Vec<Arc<PrimaryAutoCommandBuffer>>,
+    previous_frame_end: Option<Box<GpuFuture>>,
+    recreate_swap_chain: bool
 }
 
 impl GraphicsApplication {
@@ -74,9 +76,9 @@ impl GraphicsApplication {
             &device,
             &graphics_queue,
             &presentation_queue,
-            800,
-            600,
+            None
         );
+
         let render_pass = Self::create_render_pass(&device, swap_chain.format());
         let graphics_pipeline =
             Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
@@ -120,6 +122,8 @@ impl GraphicsApplication {
             })
             .collect();
 
+        let previous_frame_end = Some(Self::create_sync_objects(&device));
+
         Self {
             instance,
             debug_callback,
@@ -134,6 +138,8 @@ impl GraphicsApplication {
             graphics_pipeline,
             framebuffers,
             command_buffers,
+            previous_frame_end,
+            recreate_swap_chain: false
         }
     }
 
@@ -165,18 +171,73 @@ impl GraphicsApplication {
         }
     }
 
+    fn recreate_swap_chain(&mut self) {
+        if self.recreate_swap_chain {
+            print!("Recreating swap chain");
+            let (swap_chain, swap_chain_images) = create_swap_chain(
+                &self.instance,
+                &self.surface,
+                self.device.physical_device().index(),
+                &self.device,
+                &self.graphics_queue,
+                &self.presentation_queue,
+                Some(&self.swap_chain)
+            );
+
+            self.swap_chain = swap_chain;
+            self.swap_chain_images = swap_chain_images;
+            self.render_pass = Self::create_render_pass(&self.device, self.swap_chain.format());
+            self.graphics_pipeline = Self::create_graphics_pipeline(&self.device, self.swap_chain.dimensions(), &self.render_pass);
+            self.framebuffers = Self::create_framebuffers(&self.swap_chain_images, &self.render_pass);
+            self.create_command_buffers();
+
+            self.recreate_swap_chain = false;
+        }
+    }
+
+    fn create_sync_objects(device: &Arc<Device>) -> Box<GpuFuture> {
+        Box::new(sync::now(device.clone())) as Box<GpuFuture>
+    }
+
     fn draw_frame(&mut self) {
-        let (image_index, _, acquire_future) = acquire_next_image(self.swap_chain.clone(), None).unwrap();
+        self.previous_frame_end.as_mut().unwrap().cleanup_finished();
+
+        self.recreate_swap_chain();
+
+        let (image_index, _, acquire_future) = match acquire_next_image(self.swap_chain.clone(), None) {
+            Ok(result) => result,
+
+            Err(vulkano::swapchain::AcquireError::OutOfDate) => {
+                self.recreate_swap_chain = true;
+                return;
+            }
+
+            Err(e) => panic!("{:?}", e)
+
+        };
         let command_buffer = self.command_buffers[image_index].clone();
 
-        let future = acquire_future
+        let future = self.previous_frame_end.take().unwrap()
+            .join(acquire_future)
             .then_execute(self.graphics_queue.clone(), command_buffer)
             .unwrap()
             .then_swapchain_present(self.presentation_queue.clone(), self.swap_chain.clone(), image_index)
-            .then_signal_fence_and_flush()
-            .unwrap();
+            .then_signal_fence_and_flush();
 
-        future.wait(None).unwrap();
+
+        match future {
+            Ok(future) => {
+                self.previous_frame_end = Some(Box::new(future) as Box<_>);
+            }
+            Err(sync::FlushError::OutOfDate) => {
+                self.recreate_swap_chain = true;
+                self.previous_frame_end = Some(Box::new(vulkano::sync::now(self.device.clone())) as Box<_>);
+            }
+            Err(e) => {
+                println!("{:?}", e);
+                self.previous_frame_end = Some(Box::new(vulkano::sync::now(self.device.clone())) as Box<_>);
+            }
+        }
     }
 
     fn create_surface(instance: &Arc<Instance>) -> (EventLoop<()>, Arc<Surface<Window>>) {

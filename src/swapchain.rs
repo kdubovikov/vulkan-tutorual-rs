@@ -1,15 +1,6 @@
 use std::{sync::Arc, usize};
 
-use vulkano::{
-    device::{Device, Queue},
-    format::Format,
-    image::{ImageUsage, SwapchainImage},
-    instance::{Instance, PhysicalDevice},
-    swapchain::{
-        Capabilities, ColorSpace, PresentMode, SupportedPresentModes, Surface, Swapchain,
-    },
-    sync::SharingMode,
-};
+use vulkano::{device::{Device, Queue}, format::Format, image::{ImageUsage, SwapchainImage}, instance::{Instance, PhysicalDevice}, swapchain::{Capabilities, ColorSpace, PresentMode, SupportedPresentModes, Surface, Swapchain, SwapchainBuilder}, sync::SharingMode};
 use winit::window::Window;
 
 fn choose_swap_surface_format(available_formats: &[(Format, ColorSpace)]) -> (Format, ColorSpace) {
@@ -56,51 +47,58 @@ pub fn create_swap_chain(
     device: &Arc<Device>,
     graphics_queue: &Arc<Queue>,
     presentation_queue: &Arc<Queue>,
-    desired_width: u32,
-    desired_height: u32,
+    old_swap_chain: Option<&Arc<Swapchain<Window>>>
 ) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>) {
-    let physical_device = PhysicalDevice::from_index(instance, physical_device_index).unwrap();
-    let capabilities = surface
-        .capabilities(physical_device)
-        .expect("failed to get surface capabilities");
+    let mut builder: Option<SwapchainBuilder<Window>> = None;
 
-    let (surface_format, color_space) = choose_swap_surface_format(&capabilities.supported_formats);
-    let present_mode = choose_swap_present_mode(capabilities.present_modes);
-    let extent = choose_swap_extent(&capabilities, desired_width, desired_height);
+    if let Some(swap_chain) = old_swap_chain {
+        builder = Some(swap_chain.recreate()); // new feature in vulkako 0.24, breaks lesson 16
+    } else {
+        let physical_device = PhysicalDevice::from_index(instance, physical_device_index).unwrap();
+        let capabilities = surface
+            .capabilities(physical_device)
+            .expect("failed to get surface capabilities");
 
-    let mut image_count = capabilities.min_image_count + 1;
+        let (surface_format, color_space) = choose_swap_surface_format(&capabilities.supported_formats);
+        let present_mode = choose_swap_present_mode(capabilities.present_modes);
+        let extent = choose_swap_extent(&capabilities, 1024, 768);
 
-    if let Some(max_image_count) = capabilities.max_image_count {
-        if image_count > max_image_count {
-            image_count = max_image_count;
+        let mut image_count = capabilities.min_image_count + 1;
+
+        if let Some(max_image_count) = capabilities.max_image_count {
+            if image_count > max_image_count {
+                image_count = max_image_count;
+            }
         }
-    }
 
-    let image_usage = ImageUsage {
-        color_attachment: true,
-        ..ImageUsage::none()
-    };
-
-    let sharing: SharingMode =
-        if graphics_queue.id_within_family() == presentation_queue.id_within_family() {
-            graphics_queue.into()
-        } else {
-            vec![graphics_queue, presentation_queue].as_slice().into()
+        let image_usage = ImageUsage {
+            color_attachment: true,
+            ..ImageUsage::none()
         };
 
-    let (swap_chain, images) = Swapchain::start(device.clone(), surface.clone())
-        .num_images(image_count)
-        .sharing_mode(sharing)
-        .usage(image_usage)
-        .dimensions(extent)
-        .present_mode(present_mode)
-        .format(surface_format)
-        .color_space(color_space)
-        .layers(1)
-        .transform(capabilities.current_transform)
-        .clipped(true)
-        .build()
-        .expect("Failed to build swap chain");
+        let sharing: SharingMode =
+            if graphics_queue.id_within_family() == presentation_queue.id_within_family() {
+                graphics_queue.into()
+            } else {
+                vec![graphics_queue, presentation_queue].as_slice().into()
+            };
 
-    (swap_chain, images)
+       builder = Some(Swapchain::start(device.clone(), surface.clone())
+            .num_images(image_count)
+            .sharing_mode(sharing)
+            .usage(image_usage)
+            .dimensions(extent)
+            .present_mode(present_mode)
+            .format(surface_format)
+            .color_space(color_space)
+            .layers(1)
+            .transform(capabilities.current_transform)
+            .clipped(true));
+
+    }
+
+    builder
+        .expect("Failed to create swap chain builder")
+        .build()
+        .expect("Failed to build swap chain")
 }
