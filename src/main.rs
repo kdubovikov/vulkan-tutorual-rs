@@ -1,20 +1,18 @@
 mod device;
 mod swapchain;
+mod vertex;
 
 use device::create_device;
 use log::info;
+use vertex::vertecies;
 use std::{cmp::Ordering, iter::Inspect, ops::Bound, sync::Arc};
 use swapchain::create_swap_chain;
-use vulkano::{app_info_from_cargo_toml, command_buffer::{
+use vulkano::{app_info_from_cargo_toml, buffer::{BufferAccess, BufferUsage, CpuAccessibleBuffer}, command_buffer::{
         AutoCommandBufferBuilder, DynamicState, PrimaryAutoCommandBuffer, SubpassContents,
     }, device::{Device, Queue, QueuesIter}, format::Format, image::{view::ImageView, SwapchainImage}, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, pipeline::{
-        vertex::{BufferlessDefinition, BufferlessVertices},
-        viewport::Viewport,
-        GraphicsPipeline, GraphicsPipelineBuilder,
-    }, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{acquire_next_image, Surface, Swapchain}, sync::{self, GpuFuture}};
+    }, pipeline::{GraphicsPipeline, GraphicsPipelineAbstract, GraphicsPipelineBuilder, vertex::{BufferlessDefinition, BufferlessVertices, SingleBufferDefinition}, viewport::Viewport}, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{acquire_next_image, Surface, Swapchain}, sync::{self, GpuFuture}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{
     event::{Event, WindowEvent},
@@ -56,11 +54,12 @@ struct GraphicsApplication {
     swap_chain: Arc<Swapchain<Window>>,
     swap_chain_images: Vec<Arc<SwapchainImage<Window>>>,
     render_pass: Arc<RenderPass>,
-    graphics_pipeline: Arc<GraphicsPipeline<BufferlessDefinition>>,
+    graphics_pipeline: Arc<GraphicsPipelineAbstract + Send + Sync>,
     framebuffers: Vec<Arc<FramebufferAbstract + Send + Sync>>,
     command_buffers: Vec<Arc<PrimaryAutoCommandBuffer>>,
     previous_frame_end: Option<Box<GpuFuture>>,
-    recreate_swap_chain: bool
+    recreate_swap_chain: bool,
+    vertex_buffer: Arc<BufferAccess + Send + Sync>,
 }
 
 impl GraphicsApplication {
@@ -84,14 +83,10 @@ impl GraphicsApplication {
             Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
         let framebuffers = Self::create_framebuffers(&swap_chain_images, &render_pass);
 
+        let vertex_buffer = Self::create_vertex_buffer(&device);
         let command_buffers = framebuffers
             .iter()
             .map(|framebuffer| {
-                let verticies = BufferlessVertices {
-                    vertices: 3,
-                    instances: 1,
-                };
-
                 let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
                     device.clone(),
                     graphics_queue.family(),
@@ -109,7 +104,7 @@ impl GraphicsApplication {
                     .draw(
                         graphics_pipeline.clone(),
                         &DynamicState::none(),
-                        verticies,
+                        vec![vertex_buffer.clone()],
                         (),
                         (),
                         vec![],
@@ -139,7 +134,8 @@ impl GraphicsApplication {
             framebuffers,
             command_buffers,
             previous_frame_end,
-            recreate_swap_chain: false
+            recreate_swap_chain: false,
+            vertex_buffer
         }
     }
 
@@ -169,6 +165,10 @@ impl GraphicsApplication {
                     }
                 });
         }
+    }
+
+    fn create_vertex_buffer(device: &Arc<Device>) -> Arc<dyn BufferAccess + Send + Sync> {
+        CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::vertex_buffer(), false, vertecies().iter().cloned()).unwrap()
     }
 
     fn recreate_swap_chain(&mut self) {
@@ -316,7 +316,7 @@ impl GraphicsApplication {
         device: &Arc<Device>,
         swap_chain_extent: [u32; 2],
         render_pass: &Arc<RenderPass>,
-    ) -> Arc<GraphicsPipeline<BufferlessDefinition>> {
+    ) -> Arc<GraphicsPipelineAbstract + Send + Sync> {
         let vert_shader_module = vertex_shader::Shader::load(device.clone())
             .expect("Failed to create vertex shader module");
         let frag_shader_module = fragment_shader::Shader::load(device.clone())
@@ -332,7 +332,7 @@ impl GraphicsApplication {
 
         Arc::new(
             GraphicsPipeline::start()
-                .vertex_input(BufferlessDefinition {})
+                .vertex_input_single_buffer::<vertex::Vertex>()
                 .vertex_shader(vert_shader_module.main_entry_point(), ())
                 .triangle_list()
                 .primitive_restart(false)
