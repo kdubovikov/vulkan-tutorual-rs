@@ -7,12 +7,12 @@ use log::info;
 use vertex::vertecies;
 use std::{cmp::Ordering, iter::Inspect, ops::Bound, sync::Arc};
 use swapchain::create_swap_chain;
-use vulkano::{app_info_from_cargo_toml, buffer::{BufferAccess, BufferUsage, CpuAccessibleBuffer}, command_buffer::{
+use vulkano::{app_info_from_cargo_toml, buffer::{BufferAccess, BufferUsage, CpuAccessibleBuffer, ImmutableBuffer}, command_buffer::{
         AutoCommandBufferBuilder, DynamicState, PrimaryAutoCommandBuffer, SubpassContents,
     }, device::{Device, Queue, QueuesIter}, format::Format, image::{view::ImageView, SwapchainImage}, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
         layers_list, ApplicationInfo, Instance, InstanceExtensions, Version,
-    }, pipeline::{GraphicsPipeline, GraphicsPipelineAbstract, GraphicsPipelineBuilder, vertex::{BufferlessDefinition, BufferlessVertices, SingleBufferDefinition}, viewport::Viewport}, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{acquire_next_image, Surface, Swapchain}, sync::{self, GpuFuture}};
+    }, pipeline::{GraphicsPipeline, GraphicsPipelineAbstract, GraphicsPipelineBuilder, vertex::{BufferlessDefinition, BufferlessVertices, SingleBufferDefinition}, viewport::Viewport}, query::QueriesRange, render_pass::{Framebuffer, FramebufferAbstract, RenderPass, Subpass}, swapchain::{acquire_next_image, Surface, Swapchain}, sync::{self, GpuFuture}};
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 use winit::{
     event::{Event, WindowEvent},
@@ -83,7 +83,7 @@ impl GraphicsApplication {
             Self::create_graphics_pipeline(&device, swap_chain.dimensions(), &render_pass);
         let framebuffers = Self::create_framebuffers(&swap_chain_images, &render_pass);
 
-        let vertex_buffer = Self::create_vertex_buffer(&device);
+        let vertex_buffer = Self::create_vertex_buffer(&graphics_queue);
         let command_buffers = framebuffers
             .iter()
             .map(|framebuffer| {
@@ -167,8 +167,11 @@ impl GraphicsApplication {
         }
     }
 
-    fn create_vertex_buffer(device: &Arc<Device>) -> Arc<dyn BufferAccess + Send + Sync> {
-        CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::vertex_buffer(), false, vertecies().iter().cloned()).unwrap()
+    fn create_vertex_buffer(queue: &Arc<Queue>) -> Arc<dyn BufferAccess + Send + Sync> {
+        let vert = vertecies();
+        let (buffer, future) = ImmutableBuffer::from_iter(vert.iter().cloned(), BufferUsage::vertex_buffer(), queue.clone()).unwrap();
+        future.flush().unwrap();
+        buffer
     }
 
     fn recreate_swap_chain(&mut self) {
