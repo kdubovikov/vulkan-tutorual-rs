@@ -4,10 +4,10 @@ mod vertex;
 
 use device::create_device;
 use log::info;
-use vertex::vertecies;
-use std::{cmp::Ordering, iter::Inspect, ops::Bound, sync::Arc};
+use vertex::{indices, vertecies};
+use std::{cmp::Ordering, future, iter::Inspect, ops::Bound, sync::Arc};
 use swapchain::create_swap_chain;
-use vulkano::{app_info_from_cargo_toml, buffer::{BufferAccess, BufferUsage, CpuAccessibleBuffer, ImmutableBuffer}, command_buffer::{
+use vulkano::{app_info_from_cargo_toml, buffer::{BufferAccess, BufferUsage, CpuAccessibleBuffer, ImmutableBuffer, TypedBufferAccess}, command_buffer::{
         AutoCommandBufferBuilder, DynamicState, PrimaryAutoCommandBuffer, SubpassContents,
     }, device::{Device, Queue, QueuesIter}, format::Format, image::{view::ImageView, SwapchainImage}, instance::{
         debug::{DebugCallback, MessageSeverity, MessageType},
@@ -60,6 +60,7 @@ struct GraphicsApplication {
     previous_frame_end: Option<Box<GpuFuture>>,
     recreate_swap_chain: bool,
     vertex_buffer: Arc<BufferAccess + Send + Sync>,
+    index_buffer: Arc<TypedBufferAccess<Content = [u16]> + Send + Sync>,
 }
 
 impl GraphicsApplication {
@@ -84,6 +85,7 @@ impl GraphicsApplication {
         let framebuffers = Self::create_framebuffers(&swap_chain_images, &render_pass);
 
         let vertex_buffer = Self::create_vertex_buffer(&graphics_queue);
+        let index_buffer = Self::create_index_buffer(&graphics_queue);
         let command_buffers = framebuffers
             .iter()
             .map(|framebuffer| {
@@ -101,10 +103,11 @@ impl GraphicsApplication {
                         vec![[0.0, 0.0, 0.0, 1.0].into()],
                     )
                     .unwrap()
-                    .draw(
+                    .draw_indexed(
                         graphics_pipeline.clone(),
                         &DynamicState::none(),
                         vec![vertex_buffer.clone()],
+                        index_buffer.clone(),
                         (),
                         (),
                         vec![],
@@ -135,7 +138,8 @@ impl GraphicsApplication {
             command_buffers,
             previous_frame_end,
             recreate_swap_chain: false,
-            vertex_buffer
+            vertex_buffer,
+            index_buffer
         }
     }
 
@@ -170,6 +174,13 @@ impl GraphicsApplication {
     fn create_vertex_buffer(queue: &Arc<Queue>) -> Arc<dyn BufferAccess + Send + Sync> {
         let vert = vertecies();
         let (buffer, future) = ImmutableBuffer::from_iter(vert.iter().cloned(), BufferUsage::vertex_buffer(), queue.clone()).unwrap();
+        future.flush().unwrap();
+        buffer
+    }
+
+    fn create_index_buffer(queue: &Arc<Queue>) -> Arc<TypedBufferAccess<Content = [u16]> + Send + Sync> {
+        let idx = indices();
+        let (buffer, future) = ImmutableBuffer::from_iter(idx.iter().cloned(), BufferUsage::index_buffer(), queue.clone()).unwrap();
         future.flush().unwrap();
         buffer
     }
